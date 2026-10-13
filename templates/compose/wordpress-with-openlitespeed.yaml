@@ -1,0 +1,85 @@
+# documentation: https://github.com/litespeedtech/ols-docker-env
+# slogan: WordPress powered by OpenLiteSpeed with a persistent MariaDB database.
+# category: cms
+# tags: cms, blog, content, management, wordpress, openlitespeed, mariadb
+# logo: svgs/wordpress.svg
+# port: 80
+
+services:
+  wordpress:
+    image: litespeedtech/openlitespeed:1.8.5-lsphp84
+    environment:
+      - SERVICE_URL_WORDPRESS
+      - WORDPRESS_DB_HOST=mariadb
+      - WORDPRESS_DB_USER=$SERVICE_USER_WORDPRESS
+      - WORDPRESS_DB_PASSWORD=$SERVICE_PASSWORD_WORDPRESS
+      - WORDPRESS_DB_NAME=wordpress
+    volumes:
+      - wordpress-files:/var/www/vhosts/localhost
+      - openlitespeed-conf:/usr/local/lsws/conf
+      - openlitespeed-admin-conf:/usr/local/lsws/admin/conf
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -eu
+        cd /var/www/vhosts/localhost/html
+        if [ ! -f wp-includes/version.php ]; then
+          wp core download --allow-root
+          rm -f index.html
+        fi
+        if [ ! -f wp-config.php ]; then
+          wp config create --allow-root \
+            --dbname="$$WORDPRESS_DB_NAME" \
+            --dbuser="$$WORDPRESS_DB_USER" \
+            --dbpass="$$WORDPRESS_DB_PASSWORD" \
+            --dbhost="$$WORDPRESS_DB_HOST" \
+            --extra-php <<'PHP'
+        if (isset($$_SERVER['HTTP_X_FORWARDED_PROTO']) && strpos($$_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false) {
+            $$_SERVER['HTTPS'] = 'on';
+        }
+        PHP
+        fi
+        if [ ! -f .htaccess ]; then
+          cat > .htaccess <<'HTACCESS'
+        <IfModule mod_rewrite.c>
+        RewriteEngine On
+        RewriteBase /
+        RewriteRule ^index\.php$ - [L]
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteCond %{REQUEST_FILENAME} !-d
+        RewriteRule . /index.php [L]
+        </IfModule>
+        HTACCESS
+        fi
+        chown -R 1000:1000 /var/www/vhosts/localhost
+        exec /entrypoint.sh
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1/wp-login.php"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+  mariadb:
+    image: mariadb:11.4.13
+    environment:
+      - MYSQL_ROOT_PASSWORD=$SERVICE_PASSWORD_ROOT
+      - MYSQL_DATABASE=wordpress
+      - MYSQL_USER=$SERVICE_USER_WORDPRESS
+      - MYSQL_PASSWORD=$SERVICE_PASSWORD_WORDPRESS
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+
+volumes:
+  wordpress-files:
+  openlitespeed-conf:
+  openlitespeed-admin-conf:
+  mariadb-data:
